@@ -17,3 +17,6 @@ main(int argc, char *argv[])
   }
   exit(0);
 }
+
+
+// 将 argv[] 中的字符按位输出

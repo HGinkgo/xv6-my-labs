@@ -1,5 +1,8 @@
 // Simple grep.  Only supports ^ . * $ operators.
 
+// 读取指定文件或标准输入的文本，逐行判断是否匹配给定的简单正则模式（只支持 ^ . * $）
+// 匹配的整行就打印出来，其余忽略。
+
 #include "kernel/types.h"
 #include "kernel/stat.h"
 #include "user/user.h"
@@ -102,4 +105,5 @@ int matchstar(int c, char *re, char *text)
   }while(*text!='\0' && (*text++==c || c=='.'));
   return 0;
 }
+
 

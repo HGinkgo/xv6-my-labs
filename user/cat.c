@@ -41,6 +41,3 @@ main(int argc, char *argv[])
   }
   exit(0);
 }
-
-
-// 啊哈哈哈
