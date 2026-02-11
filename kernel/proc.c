@@ -282,6 +282,9 @@ fork(void)
 
   // Cause fork to return 0 in the child.
   np->trapframe->a0 = 0;
+  
+  // 复制父进程的 trace_mask 给子进程
+  np->trace_mask = p->trace_mask;
 
   // increment reference counts on open file descriptors.
   for(i = 0; i < NOFILE; i++)
@@ -692,4 +695,13 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+uint64 procnum(void) {
+  uint64 count = 0;
+  for(int i = 0; i < NPROC; i++) {
+    if(proc[i].state != UNUSED)
+      count++;
+  }
+  return count;
 }

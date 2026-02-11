@@ -53,7 +53,6 @@ kfree(void *pa)
 
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
-
   r = (struct run*)pa;
 
   acquire(&kmem.lock);
@@ -79,4 +78,15 @@ kalloc(void)
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
+}
+
+uint64 freemem(void) {
+  uint64 count = 0;
+  struct run* r;
+  acquire(&kmem.lock);
+  for (r = kmem.freelist; r; r = r -> next) {
+    count++;
+  }
+  release(&kmem.lock);
+  return count * PGSIZE;
 }
