@@ -20,26 +20,16 @@ static void wakeup1(struct proc *chan);
 static void freeproc(struct proc *p);
 
 extern char trampoline[]; // trampoline.S
+extern char etext[];      // kernel.ld sets this to end of kernel code.
 
 // initialize the proc table at boot time.
 void
 procinit(void)
 {
   struct proc *p;
-  
   initlock(&pid_lock, "nextpid");
   for(p = proc; p < &proc[NPROC]; p++) {
       initlock(&p->lock, "proc");
-
-      // Allocate a page for the process's kernel stack.
-      // Map it high in memory, followed by an invalid
-      // guard page.
-      char *pa = kalloc();
-      if(pa == 0)
-        panic("kalloc");
-      uint64 va = KSTACK((int) (p - proc));
-      kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
-      p->kstack = va;
   }
   kvminithart();
 }
@@ -121,6 +111,21 @@ found:
     return 0;
   }
 
+  // Init the kernal page table
+  p->kernelpgtbl = proc_pgtbl_init();
+  if(p->kernelpgtbl == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+
+  char *pa = kalloc();
+  if(pa == 0)
+    panic("kalloc");
+  uint64 va = KSTACK((int) (p - proc));
+  uvmmap(p->kernelpgtbl, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+  p->kstack = va;
+
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
@@ -141,6 +146,11 @@ freeproc(struct proc *p)
   p->trapframe = 0;
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
+  if(p->kernelpgtbl) {
+    proc_freekernelpgtbl(p->kernelpgtbl, p->sz, p->kstack);
+  }
+  p->kernelpgtbl = 0;
+  p->kstack = 0;
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -195,6 +205,29 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
   uvmfree(pagetable, sz);
 }
 
+void 
+proc_freekernelpgtbl(pagetable_t kernelpgtbl, uint64 sz, uint64 kstack_va) {
+  // 必须先把之前通过 kvmcopymappings 复制到内核页表的用户空间页面映射解绑
+  if(sz > 0)
+    uvmunmap(kernelpgtbl, 0, PGROUNDUP(sz) / PGSIZE, 0);
+
+  // 解除内核态共享的这些物理页的映射（千万不能 do_free=1 释放物理页，会导致系统崩溃）
+  uvmunmap(kernelpgtbl, UART0, 1, 0);
+  uvmunmap(kernelpgtbl, VIRTIO0, 1, 0);
+  uvmunmap(kernelpgtbl, PLIC, 0x400000 / PGSIZE, 0);
+  uvmunmap(kernelpgtbl, KERNBASE, ((uint64)etext - KERNBASE) / PGSIZE, 0);
+  uvmunmap(kernelpgtbl, (uint64)etext, (PHYSTOP - (uint64)etext) / PGSIZE, 0);
+  uvmunmap(kernelpgtbl, TRAMPOLINE, 1, 0);
+  
+  // 对于进程独占的且刚用kalloc申请的 kstack 进行解除映射并释放物理内存！！
+  if (kstack_va != 0) {
+      uvmunmap(kernelpgtbl, kstack_va, 1, 1);
+  }
+
+  // 这时候叶子节点都被拔光了，可以直接释放空页表
+  freewalk(kernelpgtbl); 
+}
+
 // a user program that calls exec("/init")
 // od -t xC initcode
 uchar initcode[] = {
@@ -221,6 +254,11 @@ userinit(void)
   uvminit(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
 
+  // 复制一份页表到内核页表
+  if (kvmcopymappings(p->pagetable, p->kernelpgtbl, 0, p->sz) < 0) {
+    panic("userinit: kvmcopymappings failed");
+  }
+
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
   p->trapframe->sp = PGSIZE;  // user stack pointer
@@ -246,8 +284,18 @@ growproc(int n)
     if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
+
+    if (kvmcopymappings(p->pagetable, p->kernelpgtbl, p->sz, sz) < 0) {
+      uvmdealloc(p->pagetable, sz, p->sz);
+      return -1;
+    }
+
   } else if(n < 0){
     sz = uvmdealloc(p->pagetable, sz, sz + n);
+    if(PGROUNDUP(sz) < PGROUNDUP(p->sz)){
+      int npages = (PGROUNDUP(p->sz) - PGROUNDUP(sz)) / PGSIZE;
+      uvmunmap(p->kernelpgtbl, PGROUNDUP(sz), npages, 0);
+    }
   }
   p->sz = sz;
   return 0;
@@ -274,6 +322,12 @@ fork(void)
     return -1;
   }
   np->sz = p->sz;
+
+  if (kvmcopymappings(np->pagetable, np->kernelpgtbl, 0, np->sz) < 0) {
+    freeproc(np);
+    release(&np->lock);
+    return -1;
+  }
 
   np->parent = p;
 
@@ -473,6 +527,9 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+
+        // Store the kernal page table into the SATP
+        proc_inithart(p->kernelpgtbl);
         swtch(&c->context, &p->context);
 
         // Process is done running for now.
@@ -480,6 +537,7 @@ scheduler(void)
         c->proc = 0;
 
         found = 1;
+        kvminithart();
       }
       release(&p->lock);
     }
@@ -645,7 +703,7 @@ kill(int pid)
 int
 either_copyout(int user_dst, uint64 dst, void *src, uint64 len)
 {
-  struct proc *p = myproc();
+  struct proc  *p = myproc();
   if(user_dst){
     return copyout(p->pagetable, dst, src, len);
   } else {
