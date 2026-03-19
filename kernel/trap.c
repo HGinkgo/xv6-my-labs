@@ -77,8 +77,21 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  if(which_dev == 2) {
+    if (p->alarm_intervals > 0) { // 只有设定了闹钟的进程才参与滴答计算
+        if (++p->alarm_ticks == p->alarm_intervals) {
+          if (p->is_alarming == 0) {
+            *(p->alarm_trapframe) = *(p->trapframe); 
+            p->trapframe->epc = (uint64)p->alarm_handler;
+            p->is_alarming = 1;
+            p->alarm_ticks = 0;
+          } else {
+            p->alarm_ticks--; 
+          }
+        }
+    }
     yield();
+  }
 
   usertrapret();
 }
