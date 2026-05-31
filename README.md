@@ -16,15 +16,6 @@
 | [`cow`](https://github.com/HGinkgo/xv6-my-labs/tree/cow) | 写时复制 | 实现 Copy-on-Write fork，减少 `fork` 时的物理内存复制开销 | 已完成 |
 | [`thread`](https://github.com/HGinkgo/xv6-my-labs/tree/thread) | 用户级线程 | 实现用户线程切换、寄存器保存恢复，并完成多线程同步相关实验 | 已完成 |
 
-## 核心收获
-
-- 理解了 xv6 中用户程序、系统调用、内核函数之间的调用链路。
-- 理解了 `ecall`、trap、trapframe、trampoline 在用户态和内核态切换中的作用。
-- 掌握了 RISC-V Sv39 页表结构、虚拟地址到物理地址的转换过程，以及 PTE 权限位的作用。
-- 实现了惰性分配和写时复制，理解了现代操作系统减少物理内存浪费的基本方法。
-- 理解了进程上下文切换与线程上下文切换的区别，包括 `swtch` 保存 callee-saved register 的原因。
-- 通过用户线程和 barrier 实验，进一步理解了并发执行、调度和同步的基本问题。
-
 ## 运行方式
 
 先克隆仓库并切换到对应实验分支：
